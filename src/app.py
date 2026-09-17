@@ -15,21 +15,26 @@ from ui.region_selector import RegionSelector
 from ui.result_window import ResultWindow
 from capture.screen_capture import ScreenCapture
 from ocr.ocr_engine import OCREngine
-from translator.google_translator import GoogleTranslator, TranslationError
+from translator import BaseTranslator, TranslationError, create_translator
 from hotkey_listener import HotkeyListener
+from config import get_config
+from utils.logger import setup_logger, get_logger
 
 
 class TranslationWorker(QObject):
     """バックグラウンドで翻訳処理を行うワーカー"""
     
     finished = pyqtSignal(str, str)  # original, translated
-    error = pyqtSignal(str)
+    error = pyqtSignal(str, str)     # message, original（読み取れていれば原文も返す）
     
-    def __init__(self, capture: ScreenCapture, ocr: OCREngine, translator: GoogleTranslator):
+    def __init__(self, capture: ScreenCapture, ocr: OCREngine, translator: BaseTranslator,
+                 source_lang: str = 'en', target_lang: str = 'ja'):
         super().__init__()
         self.capture = capture
         self.ocr = ocr
         self.translator = translator
+        self.source_lang = source_lang
+        self.target_lang = target_lang
         self.region = None
     
     def set_region(self, x: int, y: int, width: int, height: int):
@@ -38,12 +43,15 @@ class TranslationWorker(QObject):
     
     def process(self):
         """キャプチャ→OCR→翻訳を実行"""
+        logger = get_logger()
+        original_text = ""
         try:
             if not self.region:
-                self.error.emit("範囲が設定されていません")
+                self.error.emit("範囲が設定されていません", "")
                 return
             
             x, y, width, height = self.region
+            logger.info(f"Processing region: x={x} y={y} w={width} h={height}")
             
             # 画面キャプチャ
             # App化により権限があるため、mssを使用（座標計算が正確）
@@ -53,16 +61,26 @@ class TranslationWorker(QObject):
             original_text = self.ocr.extract_text(image)
             
             if not original_text.strip():
-                self.error.emit("テキストが検出されませんでした")
+                self.error.emit("テキストが検出されませんでした", "")
                 return
             
-            # 翻訳
-            translated_text = self.translator.translate(original_text)
+            logger.info(f"OCR done: {len(original_text)} chars")
             
+            # 翻訳
+            translated_text = self.translator.translate(
+                original_text, self.source_lang, self.target_lang
+            )
+            
+            logger.info(f"Translation done: {len(translated_text)} chars")
             self.finished.emit(original_text, translated_text)
             
+        except TranslationError as e:
+            # 翻訳だけが失敗した場合は、読み取れた原文を添えて返す
+            logger.error(f"Translation failed: {e}")
+            self.error.emit(f"翻訳に失敗しました: {e}", original_text)
         except Exception as e:
-            self.error.emit(f"エラーが発生しました: {str(e)}")
+            logger.exception("Unexpected error during processing")
+            self.error.emit(f"エラーが発生しました: {e}", original_text)
 
 
 class MainApp(QObject):
@@ -74,6 +92,16 @@ class MainApp(QObject):
     def __init__(self):
         super().__init__()
         self.app = QApplication.instance() or QApplication(sys.argv)
+        
+        # 設定とロギング
+        self.config = get_config()
+        self.logger = setup_logger(
+            log_file=self.config.log_file,
+            log_level=self.config.log_level,
+            max_bytes=self.config.log_max_bytes,
+            backup_count=self.config.log_backup_count,
+        )
+        self.logger.info(f"Starting Screen Translator (config: {self.config.config_path})")
         
         # コンポーネント初期化
         self.capture = ScreenCapture()
@@ -158,12 +186,41 @@ class MainApp(QObject):
         
         if self.translator is None:
             try:
-                self.translator = GoogleTranslator()
-            except RuntimeError as e:
+                self.translator = create_translator(
+                    self.config.translation_engine,
+                    timeout=self.config.translation_timeout,
+                )
+                self.logger.info(f"Translator ready: {self.translator.get_name()}")
+                self._warn_if_language_missing()
+            except (RuntimeError, TranslationError) as e:
+                self.logger.error(f"Failed to initialize translator: {e}")
                 QMessageBox.critical(None, "エラー", f"翻訳機能の初期化に失敗しました:\n{str(e)}")
                 return False
         
         return True
+    
+    def _warn_if_language_missing(self):
+        """翻訳言語がダウンロードされていない場合に案内を出す"""
+        check = getattr(self.translator, 'check_availability', None)
+        if check is None:
+            return
+        try:
+            status = check(self.config.source_lang, self.config.target_lang)
+        except TranslationError as e:
+            self.logger.warning(f"Language availability check failed: {e}")
+            return
+        
+        if status == 'installed':
+            return
+        
+        self.logger.warning(f"Language pack status: {status}")
+        pair = f"{self.config.source_lang} → {self.config.target_lang}"
+        if status == 'supported':
+            message = (f"翻訳言語（{pair}）がダウンロードされていません。\n"
+                       "システム設定 › 一般 › 言語と地域 › 翻訳言語 から追加してください。")
+        else:
+            message = f"この言語の組み合わせ（{pair}）には対応していません。"
+        QMessageBox.warning(None, "翻訳言語の確認", message)
     
     def start_capture(self):
         """範囲選択を開始"""
@@ -177,9 +234,15 @@ class MainApp(QObject):
     
     def on_region_selected(self, x: int, y: int, width: int, height: int):
         """範囲選択完了時"""
+        # 処理中であることを先に見せる（オンデバイス翻訳は長文だと十数秒かかる）
+        self._ensure_result_window().show_progress()
+        
         # ワーカースレッドで処理
         self.worker_thread = QThread()
-        self.worker = TranslationWorker(self.capture, self.ocr, self.translator)
+        self.worker = TranslationWorker(
+            self.capture, self.ocr, self.translator,
+            self.config.source_lang, self.config.target_lang,
+        )
         self.worker.set_region(x, y, width, height)
         
         self.worker.moveToThread(self.worker_thread)
@@ -191,16 +254,24 @@ class MainApp(QObject):
         
         self.worker_thread.start()
     
-    def on_translation_finished(self, original: str, translated: str):
-        """翻訳完了時"""
+    def _ensure_result_window(self) -> ResultWindow:
+        """結果ウィンドウを取得する（未生成なら作る）"""
         if self.result_window is None:
             self.result_window = ResultWindow()
-        
-        self.result_window.show_result(original, translated)
+        return self.result_window
     
-    def on_translation_error(self, error_message: str):
-        """翻訳エラー時"""
-        print(f"ERROR: {error_message}")
+    def on_translation_finished(self, original: str, translated: str):
+        """翻訳完了時"""
+        self._ensure_result_window().show_result(original, translated)
+    
+    def on_translation_error(self, error_message: str, original: str = ""):
+        """
+        翻訳エラー時
+        
+        トレイ通知は3秒で消えて見逃されるため、結果ウィンドウにも理由を残す。
+        """
+        self.logger.error(error_message)
+        self._ensure_result_window().show_error(error_message, original)
         self.tray_icon.showMessage(
             "Screen Translator",
             error_message,
@@ -210,7 +281,7 @@ class MainApp(QObject):
     
     def on_selection_cancelled(self):
         """範囲選択キャンセル時"""
-        pass  # 何もしない
+        pass  # 何もしない（この時点では結果ウィンドウは出していない）
     
     def quit(self):
         """アプリケーションを終了"""
@@ -225,6 +296,7 @@ class MainApp(QObject):
         # macOSでメニューバーアプリとして動作させる
         self.app.setQuitOnLastWindowClosed(False)
         
+        self.logger.info("Screen Translator is running")
         print("Screen Translator is running...")
         print("Right-click the tray icon or press Cmd+Shift+T to capture")
         

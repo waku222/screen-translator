@@ -1,18 +1,27 @@
 from setuptools import setup
 
 APP = ['src/main.py']
-DATA_FILES = []
+
+# Contents/Resources/ に置かれる。
+# translate-helper は Apple のオンデバイス翻訳を呼ぶ Swift 製の補助実行ファイル、
+# config.yaml は初回起動時にユーザー領域へ複製される設定のひな形。
+DATA_FILES = [
+    'helper/translate-helper',
+    'config.yaml',
+]
+
 OPTIONS = {
     'argv_emulation': False,
-    'packages': ['PyQt6', 'mss', 'PIL', 'ocrmac', 'deep_translator', 'pynput', 'pyperclip'],
+    'packages': ['PyQt6', 'mss', 'PIL', 'ocrmac', 'yaml', 'pynput', 'pyperclip'],
     'includes': ['sip', 'PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.QtWidgets'],
     'plist': {
         'CFBundleName': 'ScreenTranslator',
         'CFBundleDisplayName': 'Screen Translator',
         'CFBundleIdentifier': 'com.user.screentranslator',
-        'CFBundleVersion': '1.0.0',
-        'CFBundleShortVersionString': '1.0.0',
+        'CFBundleVersion': '1.1.0',
+        'CFBundleShortVersionString': '1.1.0',
         'LSUIElement': True,
+        'LSMinimumSystemVersion': '26.0',  # Translation.framework の installedSource 初期化子が必要
     }
 }
 

@@ -50,3 +50,6 @@ htmlcov/
 test_capture.png
 debug_capture.png
 *.pyc
+
+# ビルド成果物（Swift ヘルパー）
+helper/translate-helper

@@ -1,14 +1,22 @@
 # Screen Translator 設定ファイル
+#
+# このファイルは同梱のひな形です。実際に読み込まれるのは
+#   ~/Library/Application Support/ScreenTranslator/config.yaml
+# で、初回起動時にこのファイルがそこへ複製されます。
+# 設定を変えるときはユーザー領域の方を編集してください（アプリの再ビルードは不要）。
 
 # ホットキー設定
+# ※ 現状ホットキーは Cmd+Shift+T 固定で、この項目はまだ実装に反映されません
 hotkey:
   modifiers: ["cmd", "shift"]
   key: "t"
 
 # 翻訳設定
 translation:
-  source_lang: "en"  # 翻訳元言語 ("auto"で自動検出)
+  engine: "apple"    # 翻訳エンジン: "apple"（Apple のオンデバイス翻訳）
+  source_lang: "en"  # 翻訳元言語（Apple 翻訳では "auto" は使えません）
   target_lang: "ja"  # 翻訳先言語
+  timeout: 180       # 翻訳のタイムアウト秒数
 
 # UI設定
 ui:
@@ -19,6 +27,6 @@ ui:
 # ロギング設定
 logging:
   level: "INFO"  # ログレベル: DEBUG, INFO, WARNING, ERROR
-  file: "/tmp/screen-translator.log"
+  file: "~/Library/Logs/ScreenTranslator.log"
   max_bytes: 10485760  # 10MB
   backup_count: 3

@@ -4,18 +4,31 @@ Macで動作する画面キャプチャ翻訳アプリ。画面上の任意の�
 
 ## 機能
 
-- **カスタマイズ可能なホットキー** (デフォルト: Cmd+Shift+T) でキャプチャモード起動
+- **ホットキー** (Cmd+Shift+T) でキャプチャモード起動
 - マウスドラッグで画面範囲を選択
 - Apple Vision Framework による高精度OCR
-- Google Translate による多言語翻訳
+- **Apple Translation.framework によるオンデバイス翻訳**（通信なし・レート制限なし）
 - システムトレイ常駐型アプリ
 - 設定ファイルによるカスタマイズ
 - 詳細なロギング機能
 
+## 翻訳エンジンについて
+
+以前は Google 翻訳（deep-translator）を使っていましたが、これは
+`https://translate.google.com/m` をスクレイピングする方式で、Google 側の
+ボット検出により HTTP 429 / sorry ページが返るようになり恒常的に失敗するため廃止しました。
+
+現在は Apple の Translation.framework をオンデバイスで使用します。
+Translation.framework は Objective-C に公開されていないため PyObjC からは呼べず、
+Swift で書いた補助実行ファイル `helper/translate_helper.swift` を subprocess 経由で
+呼び出しています（JSON でやり取り）。
+
 ## 必要環境
 
-- macOS 10.15 (Catalina) 以降
+- macOS 26 以降（Translation.framework の `installedSource` 初期化子を使うため）
 - Python 3.11+
+- Xcode Command Line Tools（`swiftc` でヘルパーをビルドするため）
+- システム設定 › 一般 › 言語と地域 › 翻訳言語 に、翻訳元・翻訳先の言語がダウンロード済みであること
 
 ## インストール
 
@@ -27,13 +40,18 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# 2. アプリケーションのビルド
+# 2. 署名用の証明書を用意（初回のみ。sudo のパスワードを聞かれます）
+#    これをやっておくと、以後どれだけ再ビルドしても
+#    画面収録・アクセシビリティの許可がリセットされません
+./.claude/run/signing-cert.sh
+
+# 3. アプリケーションのビルド（Swift ヘルパーのビルドと署名も行われます）
 ./build_app.sh
 
-# 3. アプリケーションフォルダに移動
-mv dist/ScreenTranslator.app /Applications/
+# 4. アプリケーションフォルダにインストール
+./install_app.sh
 
-# 4. アプリを起動
+# 5. アプリを起動
 open /Applications/ScreenTranslator.app
 ```
 
@@ -45,6 +63,17 @@ open /Applications/ScreenTranslator.app
 
 # 2. アプリケーションが自動起動されます
 ```
+
+### 設定ファイル
+
+実際に読み込まれる設定は次の場所にあります（初回起動時にリポジトリの `config.yaml` から複製されます）:
+
+```
+~/Library/Application Support/ScreenTranslator/config.yaml
+```
+
+バンドルの外にあるので、翻訳元・翻訳先の言語やログレベルを変えるのにアプリの再ビルドは不要です。
+ログの既定の出力先は `~/Library/Logs/ScreenTranslator.log` です。
 
 初回起動時に以下の権限許可が必要です:
 - **画面収録**: スクリーンショット撮影のため

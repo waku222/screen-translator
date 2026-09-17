@@ -3,9 +3,14 @@
 YAMLファイルから設定を読み込み、アプリケーション全体で使用する
 """
 import os
+import sys
 import yaml
 from typing import Dict, Any, List, Optional
 from pathlib import Path
+
+# 設定ファイルの標準の置き場所。
+# .app の中に置くと再ビルドのたびに消えるため、バンドル外のこの場所を正とする。
+USER_CONFIG_PATH = Path.home() / 'Library' / 'Application Support' / 'ScreenTranslator' / 'config.yaml'
 
 
 class Config:
@@ -18,8 +23,10 @@ class Config:
             'key': 't'
         },
         'translation': {
+            'engine': 'apple',       # 翻訳エンジン（現在は 'apple' のみ）
             'source_lang': 'en',
-            'target_lang': 'ja'
+            'target_lang': 'ja',
+            'timeout': 180           # 翻訳ヘルパーのタイムアウト秒数
         },
         'ui': {
             'theme': 'dark',
@@ -28,7 +35,7 @@ class Config:
         },
         'logging': {
             'level': 'INFO',
-            'file': '/tmp/screen-translator.log',
+            'file': '~/Library/Logs/ScreenTranslator.log',
             'max_bytes': 10485760,  # 10MB
             'backup_count': 3
         }
@@ -42,12 +49,31 @@ class Config:
             config_path: 設定ファイルのパス（Noneの場合はデフォルトパスを使用）
         """
         if config_path is None:
-            # プロジェクトルートのconfig.yamlを使用
-            project_root = Path(__file__).parent.parent.parent
-            config_path = project_root / 'config.yaml'
+            config_path = USER_CONFIG_PATH
+            # 初回起動時は同梱のデフォルト設定をユーザー領域へ複製する
+            if not Path(config_path).exists():
+                self._seed_user_config(Path(config_path))
         
         self.config_path = Path(config_path)
         self.config: Dict[str, Any] = self._load_config()
+    
+    @staticmethod
+    def _seed_user_config(destination: Path):
+        """同梱の config.yaml をユーザー領域にコピーする（無ければ何もしない）"""
+        candidates = []
+        if getattr(sys, 'frozen', False):
+            # py2app バンドル: Contents/Resources/config.yaml
+            candidates.append(Path(sys.executable).parent.parent / 'Resources' / 'config.yaml')
+        candidates.append(Path(__file__).parent.parent / 'config.yaml')
+        
+        for source in candidates:
+            if source.is_file():
+                try:
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_text(source.read_text(encoding='utf-8'), encoding='utf-8')
+                except OSError as e:
+                    print(f"Warning: Failed to seed config at {destination}: {e}")
+                return
     
     def _load_config(self) -> Dict[str, Any]:
         """設定ファイルを読み込む"""
@@ -106,6 +132,16 @@ class Config:
         """翻訳先言語"""
         return self.config['translation']['target_lang']
     
+    @property
+    def translation_engine(self) -> str:
+        """翻訳エンジン名"""
+        return self.config['translation'].get('engine', 'apple')
+    
+    @property
+    def translation_timeout(self) -> int:
+        """翻訳のタイムアウト秒数"""
+        return int(self.config['translation'].get('timeout', 180))
+    
     # UI設定
     @property
     def ui_theme(self) -> str:
@@ -130,8 +166,8 @@ class Config:
     
     @property
     def log_file(self) -> str:
-        """ログファイルパス"""
-        return self.config['logging']['file']
+        """ログファイルパス（~ は展開して返す）"""
+        return str(Path(self.config['logging']['file']).expanduser())
     
     @property
     def log_max_bytes(self) -> int:

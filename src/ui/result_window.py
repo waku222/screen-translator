@@ -82,7 +82,19 @@ class ResultWindow(QWidget):
             QPushButton#closeBtn:hover {
                 background-color: #585b70;
             }
+            QLabel#statusLabel {
+                color: #f38ba8;
+                font-size: 13px;
+                padding: 4px 2px;
+            }
         """)
+        
+        # 状態表示（翻訳中・エラー）。通常時は隠しておく
+        self.status_label = QLabel("")
+        self.status_label.setObjectName("statusLabel")
+        self.status_label.setWordWrap(True)
+        self.status_label.hide()
+        layout.addWidget(self.status_label)
         
         # 原文セクション
         original_label = QLabel("【原文】")
@@ -144,9 +156,44 @@ class ResultWindow(QWidget):
         self.original_text = original
         self.translated_text = translated
         
+        self.status_label.hide()
         self.original_text_edit.setText(original)
         self.translated_text_edit.setText(translated)
         
+        self._present()
+    
+    def show_progress(self, message: str = "翻訳中…"):
+        """処理中であることを表示する"""
+        self.status_label.setText(f"⏳ {message}")
+        self.status_label.setStyleSheet("color: #89b4fa;")
+        self.status_label.show()
+        self.original_text_edit.clear()
+        self.translated_text_edit.clear()
+        self._present()
+    
+    def show_error(self, message: str, original: str = ""):
+        """
+        エラーを表示する
+        
+        トレイ通知は数秒で消えて見逃しやすいため、失敗した理由はこのウィンドウに残す。
+        
+        Args:
+            message: エラーメッセージ
+            original: OCR で読み取れていた原文（あれば表示する）
+        """
+        self.original_text = original
+        self.translated_text = ""
+        
+        self.status_label.setText(f"⚠️ {message}")
+        self.status_label.setStyleSheet("color: #f38ba8;")
+        self.status_label.show()
+        self.original_text_edit.setText(original)
+        self.translated_text_edit.clear()
+        
+        self._present()
+    
+    def _present(self):
+        """ウィンドウを前面に出す"""
         self.show()
         self.raise_()
         self.activateWindow()
