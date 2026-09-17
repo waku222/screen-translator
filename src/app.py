@@ -18,6 +18,7 @@ from ocr.ocr_engine import OCREngine
 from translator import BaseTranslator, TranslationError, create_translator
 from hotkey_listener import HotkeyListener
 from config import get_config
+from utils.appkit_patch import apply_clickcount_guard
 from utils.logger import setup_logger, get_logger
 
 
@@ -153,6 +154,9 @@ class MainApp(QObject):
         self.tray_icon = QSystemTrayIcon(icon, self.app)
         
         # コンテキストメニュー
+        # メニューを開くと Qt が [[NSApp currentEvent] clickCount] を呼ぶ。
+        # macOS 26 以降ではこれが例外になり得るため、起動時に
+        # utils.appkit_patch でガードを入れている（入れ忘れると落ちる）。
         self.menu = QMenu()
         
         translate_action = QAction("🌐 翻訳 (Cmd+Shift+T)", self.menu)
@@ -305,7 +309,16 @@ class MainApp(QObject):
 
 def main():
     """エントリーポイント"""
+    # QApplication を作る前に AppKit のガードを入れる
+    patched, detail = apply_clickcount_guard()
+    
     app = MainApp()
+    if patched:
+        app.logger.info(f"AppKit patch: {detail}")
+    else:
+        # ここが失敗すると、キャプチャ後にトレイをクリックした時点で落ちる
+        app.logger.error(f"AppKit patch failed: {detail}")
+    
     sys.exit(app.run())
 
 

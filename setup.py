@@ -12,7 +12,8 @@ DATA_FILES = [
 
 OPTIONS = {
     'argv_emulation': False,
-    'packages': ['PyQt6', 'mss', 'PIL', 'ocrmac', 'yaml', 'pynput', 'pyperclip'],
+    # objc / AppKit は utils/appkit_patch.py（Qt のクラッシュ回避）で使う
+    'packages': ['PyQt6', 'mss', 'PIL', 'ocrmac', 'yaml', 'pynput', 'pyperclip', 'objc', 'AppKit', 'Foundation'],
     'includes': ['sip', 'PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.QtWidgets'],
     'plist': {
         'CFBundleName': 'ScreenTranslator',
