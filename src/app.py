@@ -7,6 +7,8 @@ from PyQt6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor
 from PyQt6.QtCore import QObject, pyqtSignal, QThread, QTimer
 import sys
 import os
+import threading
+import time
 
 # 親ディレクトリをパスに追加
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -27,6 +29,7 @@ class TranslationWorker(QObject):
     
     finished = pyqtSignal(str, str)  # original, translated
     error = pyqtSignal(str, str)     # message, original（読み取れていれば原文も返す）
+    captured = pyqtSignal()          # 画面の取り込みが終わった（ここまでは画面に何も出さない）
     
     def __init__(self, capture: ScreenCapture, ocr: OCREngine, translator: BaseTranslator,
                  source_lang: str = 'en', target_lang: str = 'ja'):
@@ -58,11 +61,19 @@ class TranslationWorker(QObject):
             # App化により権限があるため、mssを使用（座標計算が正確）
             image = self.capture.capture_region(x, y, width, height)
             
+            # ここから先はアプリのウィンドウを出してよい
+            self.captured.emit()
+            
             # OCR
             original_text = self.ocr.extract_text(image)
             
             if not original_text.strip():
-                self.error.emit("テキストが検出されませんでした", "")
+                # 何が写っていたか分からないと原因を追えないので画像を残す
+                saved = self._save_failed_capture(image)
+                message = "テキストが検出されませんでした"
+                if saved:
+                    message += f"（取り込んだ画像: {saved}）"
+                self.error.emit(message, "")
                 return
             
             logger.info(f"OCR done: {len(original_text)} chars")
@@ -82,6 +93,20 @@ class TranslationWorker(QObject):
         except Exception as e:
             logger.exception("Unexpected error during processing")
             self.error.emit(f"エラーが発生しました: {e}", original_text)
+    
+    @staticmethod
+    def _save_failed_capture(image) -> str:
+        """OCR が空だったときの取り込み画像を保存し、そのパスを返す"""
+        from pathlib import Path as _Path
+        destination = _Path.home() / 'Library' / 'Logs' / 'ScreenTranslator-failed-capture.png'
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            image.save(destination, "PNG")
+            get_logger().warning(f"OCR found no text; saved capture to {destination}")
+            return str(destination)
+        except Exception as e:
+            get_logger().warning(f"Failed to save capture image: {e}")
+            return ""
 
 
 class MainApp(QObject):
@@ -126,6 +151,46 @@ class MainApp(QObject):
         
         self.setup_tray_icon()
         self.setup_hotkey()
+        self.start_warmup()
+    
+    def start_warmup(self):
+        """
+        OCR と翻訳をバックグラウンドで暖機する
+        
+        Vision の初回認識はモデルの読み込みで実測35秒かかる（2回目以降は0.1秒未満）。
+        常駐アプリなので、起動直後に済ませておけば実使用では待たされない。
+        """
+        thread = threading.Thread(target=self._warmup, name="warmup", daemon=True)
+        thread.start()
+    
+    def _warmup(self):
+        """暖機の実処理（別スレッド。UI には触らない）"""
+        try:
+            from PIL import Image, ImageDraw
+            
+            started = time.perf_counter()
+            if self.ocr is None:
+                self.ocr = OCREngine()
+            # 認識させる中身は何でもよいが、空画像だと処理が走らないので文字を描く
+            image = Image.new('RGB', (320, 80), 'white')
+            ImageDraw.Draw(image).text((10, 30), "warm up", fill='black')
+            self.ocr.extract_text(image)
+            ocr_done = time.perf_counter()
+            
+            if self.translator is None:
+                self.translator = create_translator(
+                    self.config.translation_engine,
+                    timeout=self.config.translation_timeout,
+                )
+            self.translator.translate("warm up", self.config.source_lang, self.config.target_lang)
+            done = time.perf_counter()
+            
+            self.logger.info(
+                f"Warmup done: OCR {ocr_done - started:.1f}s, translation {done - ocr_done:.1f}s"
+            )
+        except Exception as e:
+            # 暖機に失敗しても実使用時に作り直せるので、記録だけ残す
+            self.logger.warning(f"Warmup failed: {e}")
     
     def setup_hotkey(self):
         """ホットキーリスナーを設定"""
@@ -231,6 +296,11 @@ class MainApp(QObject):
         if not self.initialize_components():
             return
         
+        # 前回の結果ウィンドウは常に最前面なので、出したままだと
+        # その下の範囲を選んだときにウィンドウ自体を撮ってしまう
+        if self.result_window is not None:
+            self.result_window.hide()
+        
         self.selector = RegionSelector()
         self.selector.region_selected.connect(self.on_region_selected)
         self.selector.selection_cancelled.connect(self.on_selection_cancelled)
@@ -238,9 +308,6 @@ class MainApp(QObject):
     
     def on_region_selected(self, x: int, y: int, width: int, height: int):
         """範囲選択完了時"""
-        # 処理中であることを先に見せる（オンデバイス翻訳は長文だと十数秒かかる）
-        self._ensure_result_window().show_progress()
-        
         # ワーカースレッドで処理
         self.worker_thread = QThread()
         self.worker = TranslationWorker(
@@ -251,12 +318,19 @@ class MainApp(QObject):
         
         self.worker.moveToThread(self.worker_thread)
         self.worker_thread.started.connect(self.worker.process)
+        # 進捗表示はキャプチャが終わってから。先に出すと撮影対象に被る
+        self.worker.captured.connect(self.on_capture_done)
         self.worker.finished.connect(self.on_translation_finished)
         self.worker.error.connect(self.on_translation_error)
         self.worker.finished.connect(self.worker_thread.quit)
         self.worker.error.connect(self.worker_thread.quit)
         
-        self.worker_thread.start()
+        # オーバーレイが画面から消えるのを待ってから撮る
+        QTimer.singleShot(150, self.worker_thread.start)
+    
+    def on_capture_done(self):
+        """画面の取り込みが終わった時（ここから進捗を表示してよい）"""
+        self._ensure_result_window().show_progress()
     
     def _ensure_result_window(self) -> ResultWindow:
         """結果ウィンドウを取得する（未生成なら作る）"""

@@ -7,8 +7,10 @@ JSON で受け渡しする。完全にオンデバイスで動作し、通信も
 """
 import json
 import os
+import select
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -54,7 +56,7 @@ class AppleTranslator(BaseTranslator):
     def __init__(self, timeout: int = 180):
         """
         Args:
-            timeout: ヘルパーの実行タイムアウト秒数
+            timeout: 1回の翻訳を待つ秒数
 
         Raises:
             RuntimeError: ヘルパーが見つからない場合
@@ -66,6 +68,10 @@ class AppleTranslator(BaseTranslator):
                 "翻訳ヘルパー (translate-helper) が見つかりません。"
                 "./build_app.sh でビルドし直してください"
             )
+        # 常駐ヘルパー。翻訳モデルの読み込みはプロセスごとに1〜4秒かかるため、
+        # 呼び出しのたびに起動し直さず、立ち上げたまま使い回す。
+        self._server: Optional[subprocess.Popen] = None
+        self._lock = threading.Lock()
 
     def translate(self, text: str, source_lang: str = 'en', target_lang: str = 'ja') -> str:
         """
@@ -93,7 +99,7 @@ class AppleTranslator(BaseTranslator):
             )
 
         payload = {'text': text, 'source': source_lang, 'target': target_lang}
-        result = self._run_helper(payload)
+        result = self._request(payload)
 
         if not result.get('ok'):
             raise TranslationError(result.get('error') or "翻訳に失敗しました")
@@ -107,10 +113,84 @@ class AppleTranslator(BaseTranslator):
             str: 'installed'（利用可能） / 'supported'（未ダウンロード） / 'unsupported'（非対応）
         """
         payload = {'source': source_lang, 'target': target_lang}
+        # 可用性の確認は起動時に一度だけなので、使い捨てのプロセスで十分
         result = self._run_helper(payload, extra_args=['--check'])
         if not result.get('ok'):
             raise TranslationError(result.get('error') or "言語の確認に失敗しました")
         return result.get('status', 'unknown')
+
+    def _request(self, payload: dict) -> dict:
+        """常駐ヘルパーに1行送って1行受け取る"""
+        with self._lock:
+            process = self._ensure_server()
+            try:
+                process.stdin.write(json.dumps(payload) + "\n")
+                process.stdin.flush()
+            except (BrokenPipeError, OSError) as e:
+                self._stop_server()
+                raise TranslationError(f"翻訳ヘルパーへの送信に失敗しました: {e}") from e
+
+            line = self._read_line(process)
+
+        try:
+            return json.loads(line)
+        except json.JSONDecodeError as e:
+            raise TranslationError(f"翻訳ヘルパーの応答を解釈できませんでした: {line[:200]}") from e
+
+    def _read_line(self, process: subprocess.Popen) -> str:
+        """タイムアウト付きで1行読む（呼び出し側でロックを保持していること）"""
+        ready, _, _ = select.select([process.stdout], [], [], self.timeout)
+        if not ready:
+            # 応答がないヘルパーは捨てて、次回は新しく起動する
+            self._stop_server()
+            raise TranslationError(
+                f"翻訳がタイムアウトしました（{self.timeout}秒）。テキストが長すぎる可能性があります"
+            )
+
+        line = process.stdout.readline()
+        if not line:
+            self._stop_server()
+            raise TranslationError("翻訳ヘルパーが終了しました")
+        return line.strip()
+
+    def _ensure_server(self) -> subprocess.Popen:
+        """常駐ヘルパーを起動する（既に動いていればそれを返す）"""
+        if self._server is not None and self._server.poll() is None:
+            return self._server
+
+        try:
+            self._server = subprocess.Popen(
+                [str(self.helper_path), '--serve'],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                bufsize=1,
+            )
+        except OSError as e:
+            raise TranslationError(f"翻訳ヘルパーを起動できませんでした: {e}") from e
+        return self._server
+
+    def _stop_server(self):
+        """常駐ヘルパーを止める"""
+        process, self._server = self._server, None
+        if process is None:
+            return
+        try:
+            if process.stdin:
+                process.stdin.close()
+            process.terminate()
+            process.wait(timeout=5)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+
+    def close(self):
+        """常駐ヘルパーを終了する（アプリ終了時に呼ぶ）"""
+        with self._lock:
+            self._stop_server()
 
     def _run_helper(self, payload: dict, extra_args: Optional[list] = None) -> dict:
         """ヘルパーを起動して JSON をやり取りする"""
@@ -156,3 +236,4 @@ if __name__ == "__main__":
     test_text = "Hello, world! This is a test of the translation system."
     print(f"Original: {test_text}")
     print(f"Translated: {translator.translate(test_text)}")
+    translator.close()

@@ -68,3 +68,32 @@ def test_availability_check():
     """言語パックの状態を取得できることを確認"""
     translator = AppleTranslator()
     assert translator.check_availability('en', 'ja') in ('installed', 'supported', 'unsupported')
+
+
+@helper_required
+def test_helper_process_is_reused():
+    """2回目以降の翻訳で常駐ヘルパーが使い回されることを確認"""
+    translator = AppleTranslator()
+    try:
+        translator.translate("First", 'en', 'ja')
+        first_pid = translator._server.pid
+        translator.translate("Second", 'en', 'ja')
+        assert translator._server.pid == first_pid
+    finally:
+        translator.close()
+    assert translator._server is None
+
+
+@helper_required
+def test_translator_recovers_after_timeout():
+    """タイムアウトしてもヘルパーを起動し直して続けられることを確認"""
+    translator = AppleTranslator(timeout=180)
+    try:
+        translator.translate("Warm up", 'en', 'ja')
+        translator.timeout = 0.01
+        with pytest.raises(TranslationError):
+            translator.translate("This should time out because the timeout is tiny.", 'en', 'ja')
+        translator.timeout = 180
+        assert translator.translate("Recovered", 'en', 'ja')
+    finally:
+        translator.close()

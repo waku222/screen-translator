@@ -181,25 +181,22 @@ class RegionSelector(QWidget):
         if self.start_pos:
             rect = QRect(self.start_pos, global_pos).normalized()
             
+            # オーバーレイを先に閉じる。
+            # region_selected は同期的に処理されるため、先に emit すると
+            # オーバーレイが画面に残ったままキャプチャされてしまう。
+            self._close_overlays()
+            self.start_pos = None
+            self.current_rect = None
+            
             # 範囲が有効な場合のみシグナルを発行
             if rect.width() > 10 and rect.height() > 10:
-                # Retinaディスプレイなどのスケールファクターを考慮する必要があるか確認
-                # screencaptureコマンドは通常、論理座標（ポイント）を受け取るため、
-                # PyQtの座標（論理座標）そのままで良いはずだが、念のため整数化する
-                
-                # デバッグ用にDPRを取得（必要に応じて計算に含める）
-                # dpr = self.screen.devicePixelRatio()
-                
+                # 座標は論理座標（ポイント）のまま渡す
                 self.region_selected.emit(
                     int(rect.x()),
                     int(rect.y()),
                     int(rect.width()),
                     int(rect.height())
                 )
-            
-            self._close_overlays()
-            self.start_pos = None
-            self.current_rect = None
     
     def _on_key_pressed(self, key: int):
         """キー押下時"""
