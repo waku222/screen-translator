@@ -20,6 +20,7 @@ from ocr.ocr_engine import OCREngine, OCRError
 from translator import BaseTranslator, TranslationError, create_translator
 from hotkey_listener import HotkeyListener
 from config import get_config
+from helper_process import get_shared_helper
 from utils.appkit_patch import apply_clickcount_guard
 from utils.logger import setup_logger, get_logger
 
@@ -87,7 +88,7 @@ class TranslationWorker(QObject):
             self.finished.emit(original_text, translated_text)
             
         except OCRError as e:
-            # Vision 自体が失敗した場合。「テキストが無い」とは区別する
+            # 文字認識そのものが失敗した場合。「テキストが無い」とは区別する
             logger.error(f"OCR failed: {e}")
             self.error.emit(f"文字の読み取りに失敗しました: {e}", "")
         except TranslationError as e:
@@ -147,6 +148,15 @@ class MainApp(QObject):
         self.worker_thread = None
         self.worker = None
         
+        # 暖機（初回のモデル構築）が終わったか
+        self.warmup_done = False
+        
+        # 処理中フラグ。連打で選択オーバーレイやワーカーが多重に走るのを防ぐ
+        self.busy = False
+        
+        # OCR と翻訳の遅延生成を主スレッドと暖機スレッドで取り合わないようにする
+        self._components_lock = threading.Lock()
+        
         # ホットキーリスナー
         self.hotkey_listener = None
         
@@ -155,6 +165,7 @@ class MainApp(QObject):
         
         self.setup_tray_icon()
         self.setup_hotkey()
+        self.check_permissions()
         self.start_warmup()
     
     def _ocr_languages(self) -> list:
@@ -166,35 +177,54 @@ class MainApp(QObject):
         source = self.config.source_lang
         return [known.get(source, source if '-' in source else 'en-US')]
     
+    # 初回のモデル構築は失敗することがあるので、暖機は数回試す
+    WARMUP_ATTEMPTS = 3
+    WARMUP_RETRY_WAIT = 5.0
+    
     def start_warmup(self):
         """
         OCR と翻訳をバックグラウンドで暖機する
         
-        Vision の初回認識はモデルの読み込みで実測35秒かかる（2回目以降は0.1秒未満）。
-        常駐アプリなので、起動直後に済ませておけば実使用では待たされない。
+        .app はバンドル ID ごとに専用の Vision モデルキャッシュを持つ。
+        キャッシュが無い状態の初回認識は実測で約40秒かかり、しかも1回目は
+        失敗することがある（2回目以降は0.1秒程度）。アプリを再ビルドすると
+        キャッシュが無効になるため、起動直後にここで踏んでおく。
         """
-        thread = threading.Thread(target=self._warmup, name="warmup", daemon=True)
+        thread = threading.Thread(target=self._warmup_loop, name="warmup", daemon=True)
         thread.start()
     
-    def _warmup(self):
-        """暖機の実処理（別スレッド。UI には触らない）"""
+    def _warmup_loop(self):
+        """暖機を成功するまで数回試す"""
+        for attempt in range(1, self.WARMUP_ATTEMPTS + 1):
+            if self._warmup():
+                self.warmup_done = True
+                return
+            if attempt < self.WARMUP_ATTEMPTS:
+                self.logger.info(f"Retrying warmup ({attempt}/{self.WARMUP_ATTEMPTS})")
+                time.sleep(self.WARMUP_RETRY_WAIT)
+        self.logger.error("Warmup did not succeed; first capture may be slow or fail")
+    
+    def _warmup(self) -> bool:
+        """暖機の実処理（別スレッド。UI には触らない）。成功したら True"""
         try:
             from PIL import Image, ImageDraw
             
             started = time.perf_counter()
-            if self.ocr is None:
-                self.ocr = OCREngine(self._ocr_languages())
+            with self._components_lock:
+                if self.ocr is None:
+                    self.ocr = OCREngine(self._ocr_languages())
             # 認識させる中身は何でもよいが、空画像だと処理が走らないので文字を描く
             image = Image.new('RGB', (320, 80), 'white')
             ImageDraw.Draw(image).text((10, 30), "warm up", fill='black')
             warm_text = self.ocr.extract_text(image)
             ocr_done = time.perf_counter()
             
-            if self.translator is None:
-                self.translator = create_translator(
-                    self.config.translation_engine,
-                    timeout=self.config.translation_timeout,
-                )
+            with self._components_lock:
+                if self.translator is None:
+                    self.translator = create_translator(
+                        self.config.translation_engine,
+                        timeout=self.config.translation_timeout,
+                    )
             self.translator.translate("warm up", self.config.source_lang, self.config.target_lang)
             done = time.perf_counter()
             
@@ -202,14 +232,55 @@ class MainApp(QObject):
                 f"Warmup done: OCR {ocr_done - started:.1f}s ({len(warm_text)} chars), "
                 f"translation {done - ocr_done:.1f}s"
             )
+            return True
         except Exception as e:
             # 暖機に失敗しても実使用時に作り直せるので、記録だけ残す
             self.logger.warning(f"Warmup failed: {e}")
+            return False
     
     def setup_hotkey(self):
         """ホットキーリスナーを設定"""
         self.hotkey_listener = HotkeyListener(self._on_hotkey_pressed)
-        self.hotkey_listener.start()
+        started = self.hotkey_listener.start()
+        # 入力監視の権限が無いと黙って動かないので、状態を必ず残す
+        if started and self.hotkey_listener.is_alive():
+            self.logger.info("Hotkey listener started (Cmd+Shift+T)")
+        else:
+            self.logger.error(
+                "Hotkey listener did not start. "
+                "システム設定 › プライバシーとセキュリティ › 入力監視 で許可が必要です"
+            )
+    
+    def check_permissions(self):
+        """
+        画面収録の権限を確認する
+        
+        権限が無いと mss は壁紙だけを返すため、OCR の結果が空になり
+        「テキストが検出されませんでした」と見分けがつかない。
+        """
+        try:
+            import Quartz
+        except ImportError:
+            return
+        
+        if Quartz.CGPreflightScreenCaptureAccess():
+            self.logger.info("Screen recording permission: granted")
+            return
+        
+        self.logger.error("Screen recording permission: not granted")
+        QMessageBox.warning(
+            None,
+            "画面収録の許可が必要です",
+            "画面を取り込む許可がありません。\n"
+            "システム設定 › プライバシーとセキュリティ › 画面収録 で\n"
+            "ScreenTranslator を許可してください。\n\n"
+            "許可のあとはアプリを起動し直してください。",
+        )
+        # 許可ダイアログを出す（未許可の初回のみ表示される）
+        try:
+            Quartz.CGRequestScreenCaptureAccess()
+        except Exception as e:
+            self.logger.warning(f"Could not request screen capture access: {e}")
     
     def _on_hotkey_pressed(self):
         """ホットキーが押された時（別スレッドから呼ばれる）"""
@@ -260,6 +331,11 @@ class MainApp(QObject):
     
     def initialize_components(self):
         """OCRと翻訳コンポーネントを初期化（遅延初期化）"""
+        with self._components_lock:
+            return self._initialize_components()
+    
+    def _initialize_components(self):
+        """遅延初期化の実処理（ロックを保持して呼ぶこと）"""
         if self.ocr is None:
             try:
                 self.ocr = OCREngine(self._ocr_languages())
@@ -289,10 +365,6 @@ class MainApp(QObject):
             return
         try:
             status = check(self.config.source_lang, self.config.target_lang)
-        except OCRError as e:
-            # Vision 自体が失敗した場合。「テキストが無い」とは区別する
-            logger.error(f"OCR failed: {e}")
-            self.error.emit(f"文字の読み取りに失敗しました: {e}", "")
         except TranslationError as e:
             self.logger.warning(f"Language availability check failed: {e}")
             return
@@ -311,8 +383,16 @@ class MainApp(QObject):
     
     def start_capture(self):
         """範囲選択を開始"""
+        if self.busy:
+            # 選択中・処理中に重ねて始めると、オーバーレイが取り残されたり
+            # 実行中の QThread が差し替わってクラッシュする
+            self.logger.info("Capture already in progress; ignoring request")
+            return
+        
         if not self.initialize_components():
             return
+        
+        self.busy = True
         
         # 前回の結果ウィンドウは常に最前面なので、出したままだと
         # その下の範囲を選んだときにウィンドウ自体を撮ってしまう
@@ -348,7 +428,13 @@ class MainApp(QObject):
     
     def on_capture_done(self):
         """画面の取り込みが終わった時（ここから進捗を表示してよい）"""
-        self._ensure_result_window().show_progress()
+        if self.warmup_done:
+            self._ensure_result_window().show_progress()
+        else:
+            # 初回はモデルの構築待ちで1分近くかかることがある
+            self._ensure_result_window().show_progress(
+                "初回の準備中です（1分ほどかかることがあります）…"
+            )
     
     def _ensure_result_window(self) -> ResultWindow:
         """結果ウィンドウを取得する（未生成なら作る）"""
@@ -358,6 +444,7 @@ class MainApp(QObject):
     
     def on_translation_finished(self, original: str, translated: str):
         """翻訳完了時"""
+        self.busy = False
         self._ensure_result_window().show_result(original, translated)
     
     def on_translation_error(self, error_message: str, original: str = ""):
@@ -366,6 +453,7 @@ class MainApp(QObject):
         
         トレイ通知は3秒で消えて見逃されるため、結果ウィンドウにも理由を残す。
         """
+        self.busy = False
         self.logger.error(error_message)
         self._ensure_result_window().show_error(error_message, original)
         self.tray_icon.showMessage(
@@ -377,7 +465,7 @@ class MainApp(QObject):
     
     def on_selection_cancelled(self):
         """範囲選択キャンセル時"""
-        pass  # 何もしない（この時点では結果ウィンドウは出していない）
+        self.busy = False
     
     def quit(self):
         """アプリケーションを終了"""

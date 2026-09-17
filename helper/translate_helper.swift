@@ -11,6 +11,9 @@
 //    可用性: 引数 --check を付けると stdin は {"source": "en", "target": "ja"} のみ
 //         -> {"ok": true, "status": "installed" | "supported" | "unsupported"}
 //
+//  文字認識: {"op": "ocr", "imagePath": "/path/to.png", "languages": ["en-US"]}
+//         -> {"ok": true, "text": "..."}  /  {"ok": false, "error": "..."}
+//
 //  --serve を付けると常駐モードになり、1行1リクエストで受け付けて1行で返す。
 //  翻訳モデルの読み込みはプロセスごとに発生する（実測で初回に1〜4秒）ため、
 //  呼び出しのたびに起動し直すと毎回その分待たされる。常駐させて使い回す。
@@ -23,12 +26,16 @@
 
 import Foundation
 import Translation
+import Vision
 
 /// stdin から受け取るリクエスト
 struct Request: Decodable {
+    let op: String?          // "translate"（既定）/ "ocr"
     let text: String?
     let source: String?
     let target: String?
+    let imagePath: String?   // op == "ocr" のときに読む画像ファイル
+    let languages: [String]? // OCR の言語（例: ["en-US"]）
 }
 
 /// stdout に返すレスポンス
@@ -37,6 +44,32 @@ struct Response: Encodable {
     var text: String?
     var status: String?
     var error: String?
+}
+
+/// Vision による文字認識
+///
+/// アプリ本体（Python）ではなくこのヘルパーで実行する。
+/// この Mac では Vision のモデル構築が初回に約40秒かかり、その初回が
+/// e5rt エラーで失敗することがある。一度失敗すると、そのプロセスでは
+/// 以後の要求がすべて即座に失敗する（プロセスが使い物にならなくなる）。
+/// 別プロセスに分けておけば、失敗したら呼び出し側が作り直せる。
+enum TextRecognizer {
+    static func recognize(imagePath: String, languages: [String]) throws -> String {
+        guard let data = FileManager.default.contents(atPath: imagePath) else {
+            throw HelperError.imageUnreadable(imagePath)
+        }
+
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.recognitionLanguages = languages
+
+        let handler = VNImageRequestHandler(data: data, options: [:])
+        try handler.perform([request])
+
+        let observations = request.results ?? []
+        return observations.compactMap { $0.topCandidates(1).first?.string }
+            .joined(separator: "\n")
+    }
 }
 
 @main
@@ -52,6 +85,15 @@ struct TranslateHelper {
             let request = try readRequest()
             let source = Locale.Language(identifier: request.source ?? "en")
             let target = Locale.Language(identifier: request.target ?? "ja")
+
+            if request.op == "ocr" {
+                let text = try TextRecognizer.recognize(
+                    imagePath: request.imagePath ?? "",
+                    languages: request.languages ?? ["en-US"]
+                )
+                emit(Response(ok: true, text: text))
+                return
+            }
 
             if CommandLine.arguments.contains("--check") {
                 let status = await LanguageAvailability().status(from: source, to: target)
@@ -92,6 +134,19 @@ struct TranslateHelper {
                 continue
             }
             
+            if request.op == "ocr" {
+                do {
+                    let text = try TextRecognizer.recognize(
+                        imagePath: request.imagePath ?? "",
+                        languages: request.languages ?? ["en-US"]
+                    )
+                    emit(Response(ok: true, text: text))
+                } catch {
+                    emit(Response(ok: false, error: describe(error)))
+                }
+                continue
+            }
+
             let sourceID = request.source ?? "en"
             let targetID = request.target ?? "ja"
             let key = "\(sourceID)>\(targetID)"
@@ -177,10 +232,12 @@ struct TranslateHelper {
 
 enum HelperError: LocalizedError {
     case emptyInput
+    case imageUnreadable(String)
 
     var errorDescription: String? {
         switch self {
         case .emptyInput: return "リクエストが空です"
+        case .imageUnreadable(let path): return "画像を読み込めませんでした: \(path)"
         }
     }
 }

@@ -13,19 +13,19 @@ import pytest
 # srcディレクトリをパスに追加
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
+from helper_process import find_helper
 from translator import AppleTranslator, TranslationError, create_translator
-from translator.apple_translator import _find_helper
 
 
 helper_required = pytest.mark.skipif(
-    _find_helper() is None,
+    find_helper() is None,
     reason="translate-helper が未ビルド（./build_app.sh を実行してください）"
 )
 
 
 def test_create_translator_returns_apple():
     """既定のエンジンが Apple 翻訳であることを確認"""
-    if _find_helper() is None:
+    if find_helper() is None:
         pytest.skip("translate-helper が未ビルド")
     translator = create_translator('apple')
     assert isinstance(translator, AppleTranslator)
@@ -76,24 +76,24 @@ def test_helper_process_is_reused():
     translator = AppleTranslator()
     try:
         translator.translate("First", 'en', 'ja')
-        first_pid = translator._server.pid
+        first_pid = translator.helper._process.pid
         translator.translate("Second", 'en', 'ja')
-        assert translator._server.pid == first_pid
+        assert translator.helper._process.pid == first_pid
     finally:
         translator.close()
-    assert translator._server is None
+    assert not translator.helper.is_running()
 
 
 @helper_required
 def test_translator_recovers_after_timeout():
     """タイムアウトしてもヘルパーを起動し直して続けられることを確認"""
-    translator = AppleTranslator(timeout=180)
+    translator = AppleTranslator(timeout=60)
     try:
         translator.translate("Warm up", 'en', 'ja')
         translator.timeout = 0.01
         with pytest.raises(TranslationError):
             translator.translate("This should time out because the timeout is tiny.", 'en', 'ja')
-        translator.timeout = 180
+        translator.timeout = 60
         assert translator.translate("Recovered", 'en', 'ja')
     finally:
         translator.close()

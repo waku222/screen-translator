@@ -26,7 +26,7 @@ class Config:
             'engine': 'apple',       # 翻訳エンジン（現在は 'apple' のみ）
             'source_lang': 'en',
             'target_lang': 'ja',
-            'timeout': 180           # 翻訳ヘルパーのタイムアウト秒数
+            'timeout': 45            # 翻訳1回を待つ秒数
         },
         'ui': {
             'theme': 'dark',
@@ -140,7 +140,7 @@ class Config:
     @property
     def translation_timeout(self) -> int:
         """翻訳のタイムアウト秒数"""
-        return int(self.config['translation'].get('timeout', 180))
+        return int(self.config['translation'].get('timeout', 45))
     
     # UI設定
     @property

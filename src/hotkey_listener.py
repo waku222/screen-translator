@@ -22,10 +22,9 @@ class HotkeyListener:
         self.current_keys = set()
         
         # ホットキーの組み合わせ (Cmd+Shift+T)
-        self.hotkey_combination = {
-            keyboard.Key.cmd,
-            keyboard.Key.shift,
-        }
+        # 左右どちらの修飾キーでも成立させる
+        self.cmd_keys = {keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r}
+        self.shift_keys = {keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r}
         self.hotkey_char = 't'
     
     def _on_press(self, key):
@@ -40,8 +39,9 @@ class HotkeyListener:
                 char = key.char.lower()
                 
                 # 修飾キーが押されていてかつ目的のキーが押された
-                if (self.hotkey_combination.issubset(self.current_keys) and 
-                    char == self.hotkey_char):
+                if (self.current_keys & self.cmd_keys and
+                        self.current_keys & self.shift_keys and
+                        char == self.hotkey_char):
                     # コールバックを別スレッドで実行
                     threading.Thread(target=self.callback, daemon=True).start()
                     
@@ -56,13 +56,27 @@ class HotkeyListener:
         except Exception:
             pass
     
-    def start(self):
-        """ホットキーリスナーを開始"""
-        self.listener = keyboard.Listener(
-            on_press=self._on_press,
-            on_release=self._on_release
-        )
-        self.listener.start()
+    def start(self) -> bool:
+        """
+        ホットキーリスナーを開始する
+
+        Returns:
+            bool: 開始できたか（入力監視の権限が無いと失敗する）
+        """
+        try:
+            self.listener = keyboard.Listener(
+                on_press=self._on_press,
+                on_release=self._on_release
+            )
+            self.listener.start()
+            return True
+        except Exception:
+            self.listener = None
+            return False
+    
+    def is_alive(self) -> bool:
+        """リスナーが動いているか（権限が無いと止まる）"""
+        return self.listener is not None and self.listener.is_alive()
     
     def stop(self):
         """ホットキーリスナーを停止"""

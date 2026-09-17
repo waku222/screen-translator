@@ -1,9 +1,9 @@
 """
 OCRエンジンのテスト
 
-以前使っていた ocrmac は Vision の失敗を握りつぶして空リストを返すため、
-「テキストが無い」と「OCR が失敗した」が区別できなかった。
-ここでは失敗が例外になること、再試行が働くことを確認する。
+文字認識は Swift 製ヘルパーに任せている。この環境では Vision のモデル構築が
+初回に約40秒かかり、失敗するとそのプロセスでは以後ずっと失敗するため、
+失敗を検知してヘルパーを作り直せることが重要になる。
 """
 import sys
 import os
@@ -12,11 +12,16 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-pytest.importorskip("Vision", reason="PyObjC の Vision が必要")
-
 from PIL import Image, ImageDraw, ImageFont
 
-from ocr.ocr_engine import OCREngine, OCRError, TextBlock
+from helper_process import HelperError, find_helper
+from ocr.ocr_engine import OCREngine, OCRError
+
+
+helper_required = pytest.mark.skipif(
+    find_helper() is None,
+    reason="translate-helper が未ビルド（./build_app.sh を実行してください）"
+)
 
 
 def _text_image(text: str = "Hello from the screen translator") -> Image.Image:
@@ -27,55 +32,83 @@ def _text_image(text: str = "Hello from the screen translator") -> Image.Image:
     return image
 
 
+class FakeHelper:
+    """ヘルパーの代わり（再試行と作り直しの確認用）"""
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.requests = []
+        self.restarts = 0
+
+    def request(self, payload, timeout=None):
+        self.requests.append(payload)
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    def restart(self):
+        self.restarts += 1
+
+
+@helper_required
 def test_extract_text_reads_rendered_text():
     """描画した文字を読み取れることを確認"""
-    result = OCREngine().extract_text(_text_image())
+    result = OCREngine(['en-US']).extract_text(_text_image())
     assert "screen translator" in result.lower()
 
 
-def test_extract_with_details_returns_blocks():
-    """信頼度と位置を持つブロックが返ることを確認"""
-    blocks = OCREngine().extract_with_details(_text_image())
-    assert blocks
-    assert all(isinstance(b, TextBlock) for b in blocks)
-    assert all(0.0 <= b.confidence <= 1.0 for b in blocks)
-
-
+@helper_required
 def test_blank_image_returns_empty_string():
     """文字が無い画像では空文字を返すことを確認（例外にはしない）"""
-    assert OCREngine().extract_text(Image.new('RGB', (200, 80), 'white')) == ""
+    assert OCREngine(['en-US']).extract_text(Image.new('RGB', (200, 80), 'white')) == ""
 
 
-def test_failure_raises_after_retries(monkeypatch):
-    """Vision が失敗し続けた場合は OCRError になることを確認"""
-    engine = OCREngine()
-    attempts = []
+def test_failure_restarts_helper_and_retries():
+    """失敗したらヘルパーを作り直して試し直すことを確認"""
+    helper = FakeHelper([
+        {'ok': False, 'error': 'e5rt エラー'},
+        {'ok': True, 'text': 'recovered'},
+    ])
+    engine = OCREngine(['en-US'], helper=helper)
 
-    def always_fail(png_data):
-        attempts.append(1)
-        raise OCRError("テスト用の失敗")
+    assert engine.extract_text(_text_image()) == 'recovered'
+    assert helper.restarts == 1
+    assert len(helper.requests) == 2
 
-    monkeypatch.setattr(engine, '_recognize', always_fail)
-    monkeypatch.setattr(engine, 'RETRY_WAIT', 0)
+
+def test_persistent_failure_raises_ocr_error():
+    """作り直しても失敗し続ける場合は OCRError になることを確認"""
+    helper = FakeHelper([
+        {'ok': False, 'error': 'e5rt エラー'},
+        {'ok': False, 'error': 'e5rt エラー'},
+    ])
+    engine = OCREngine(['en-US'], helper=helper)
 
     with pytest.raises(OCRError):
         engine.extract_text(_text_image())
-    assert len(attempts) == OCREngine.MAX_ATTEMPTS
+    assert len(helper.requests) == OCREngine.MAX_ATTEMPTS
 
 
-def test_retry_recovers_from_transient_failure(monkeypatch):
-    """一時的な失敗は再試行で回復することを確認"""
-    engine = OCREngine()
-    calls = []
+def test_helper_error_is_wrapped():
+    """ヘルパーとの通信エラーも OCRError として扱うことを確認"""
+    helper = FakeHelper([HelperError("応答なし"), HelperError("応答なし")])
+    engine = OCREngine(['en-US'], helper=helper)
 
-    def fail_once(png_data):
-        calls.append(1)
-        if len(calls) == 1:
-            raise OCRError("一時的な失敗")
-        return [TextBlock("recovered", 1.0, (0, 0, 1, 1))]
+    with pytest.raises(OCRError):
+        engine.extract_text(_text_image())
 
-    monkeypatch.setattr(engine, '_recognize', fail_once)
-    monkeypatch.setattr(engine, 'RETRY_WAIT', 0)
 
-    assert engine.extract_text(_text_image()) == "recovered"
-    assert len(calls) == 2
+def test_temp_file_is_removed():
+    """ヘルパーに渡した一時ファイルを残さないことを確認"""
+    captured = {}
+
+    class PathRecordingHelper(FakeHelper):
+        def request(self, payload, timeout=None):
+            captured['path'] = payload['imagePath']
+            return super().request(payload, timeout)
+
+    helper = PathRecordingHelper([{'ok': True, 'text': 'ok'}])
+    OCREngine(['en-US'], helper=helper).extract_text(_text_image())
+
+    assert not os.path.exists(captured['path'])
