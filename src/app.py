@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ui.region_selector import RegionSelector
 from ui.result_window import ResultWindow
 from capture.screen_capture import ScreenCapture
-from ocr.ocr_engine import OCREngine
+from ocr.ocr_engine import OCREngine, OCRError
 from translator import BaseTranslator, TranslationError, create_translator
 from hotkey_listener import HotkeyListener
 from config import get_config
@@ -86,6 +86,10 @@ class TranslationWorker(QObject):
             logger.info(f"Translation done: {len(translated_text)} chars")
             self.finished.emit(original_text, translated_text)
             
+        except OCRError as e:
+            # Vision 自体が失敗した場合。「テキストが無い」とは区別する
+            logger.error(f"OCR failed: {e}")
+            self.error.emit(f"文字の読み取りに失敗しました: {e}", "")
         except TranslationError as e:
             # 翻訳だけが失敗した場合は、読み取れた原文を添えて返す
             logger.error(f"Translation failed: {e}")
@@ -153,6 +157,15 @@ class MainApp(QObject):
         self.setup_hotkey()
         self.start_warmup()
     
+    def _ocr_languages(self) -> list:
+        """設定の翻訳元言語を Vision の言語コードに直す"""
+        # Vision は地域付きのコードを取る
+        known = {'en': 'en-US', 'ja': 'ja-JP', 'zh': 'zh-Hans', 'ko': 'ko-KR',
+                 'fr': 'fr-FR', 'de': 'de-DE', 'es': 'es-ES', 'it': 'it-IT',
+                 'pt': 'pt-BR', 'ru': 'ru-RU'}
+        source = self.config.source_lang
+        return [known.get(source, source if '-' in source else 'en-US')]
+    
     def start_warmup(self):
         """
         OCR と翻訳をバックグラウンドで暖機する
@@ -170,11 +183,11 @@ class MainApp(QObject):
             
             started = time.perf_counter()
             if self.ocr is None:
-                self.ocr = OCREngine()
+                self.ocr = OCREngine(self._ocr_languages())
             # 認識させる中身は何でもよいが、空画像だと処理が走らないので文字を描く
             image = Image.new('RGB', (320, 80), 'white')
             ImageDraw.Draw(image).text((10, 30), "warm up", fill='black')
-            self.ocr.extract_text(image)
+            warm_text = self.ocr.extract_text(image)
             ocr_done = time.perf_counter()
             
             if self.translator is None:
@@ -186,7 +199,8 @@ class MainApp(QObject):
             done = time.perf_counter()
             
             self.logger.info(
-                f"Warmup done: OCR {ocr_done - started:.1f}s, translation {done - ocr_done:.1f}s"
+                f"Warmup done: OCR {ocr_done - started:.1f}s ({len(warm_text)} chars), "
+                f"translation {done - ocr_done:.1f}s"
             )
         except Exception as e:
             # 暖機に失敗しても実使用時に作り直せるので、記録だけ残す
@@ -248,7 +262,7 @@ class MainApp(QObject):
         """OCRと翻訳コンポーネントを初期化（遅延初期化）"""
         if self.ocr is None:
             try:
-                self.ocr = OCREngine()
+                self.ocr = OCREngine(self._ocr_languages())
             except RuntimeError as e:
                 QMessageBox.critical(None, "エラー", f"OCRの初期化に失敗しました:\n{str(e)}")
                 return False
@@ -275,6 +289,10 @@ class MainApp(QObject):
             return
         try:
             status = check(self.config.source_lang, self.config.target_lang)
+        except OCRError as e:
+            # Vision 自体が失敗した場合。「テキストが無い」とは区別する
+            logger.error(f"OCR failed: {e}")
+            self.error.emit(f"文字の読み取りに失敗しました: {e}", "")
         except TranslationError as e:
             self.logger.warning(f"Language availability check failed: {e}")
             return
