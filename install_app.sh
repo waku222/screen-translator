@@ -10,7 +10,12 @@ cd "$SCRIPT_DIR"
 APP_NAME="ScreenTranslator.app"
 SOURCE_APP="$SCRIPT_DIR/dist/$APP_NAME"
 DEST_DIR="/Applications"
-OLD_PLIST="$HOME/Library/LaunchAgents/com.user.start.translation.plist"
+# 旧方式（start.sh を launchd で起動する）の残骸。2つの名前が使われていた。
+# どちらも実体の無いパスを指すので、見つけたらゴミ箱へ移す。
+OLD_PLISTS=(
+    "$HOME/Library/LaunchAgents/com.user.start.translation.plist"
+    "$HOME/Library/LaunchAgents/com.user.screentranslator.plist"
+)
 
 echo "=== Installing Screen Translator ==="
 
@@ -28,13 +33,16 @@ if pgrep -f "$DEST_DIR/$APP_NAME/Contents/MacOS/ScreenTranslator" >/dev/null 2>&
 fi
 
 # 2. 旧 LaunchAgent の残骸を片付ける
-#    このプロファイルは別マシンのパス (/Users/user/...) を指していて常に失敗する。
+#    どちらも旧作業ディレクトリ (~/Documents/Cursor/翻訳) の start.sh を指しており、
+#    そこは既に存在しないので RunAtLoad がログインのたびに失敗する。
 #    ログイン時の自動起動はシステム設定のログイン項目で行う。
-if [ -f "$OLD_PLIST" ]; then
-    echo "Removing old Launch Agent..."
-    launchctl unload "$OLD_PLIST" 2>/dev/null || true
-    mv "$OLD_PLIST" "$HOME/.Trash/" 2>/dev/null || true
-fi
+for OLD_PLIST in "${OLD_PLISTS[@]}"; do
+    if [ -f "$OLD_PLIST" ]; then
+        echo "Removing old Launch Agent: $(basename "$OLD_PLIST")"
+        launchctl unload "$OLD_PLIST" 2>/dev/null || true
+        mv "$OLD_PLIST" "$HOME/.Trash/$(basename "$OLD_PLIST").$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+    fi
+done
 
 # 3. 旧版をゴミ箱へ移してから新版を配置する
 if [ -d "$DEST_DIR/$APP_NAME" ]; then
