@@ -260,6 +260,12 @@ class MainApp(QObject):
             self.logger.error("既定のホットキーで起動します")
             self.hotkey_listener = HotkeyListener(self._on_hotkey_pressed)
 
+        # イベントが実際に届いているかを1度だけ記録する。
+        # 「押しても無反応」の原因が許可なのか判定なのかを切り分けられる。
+        self.hotkey_listener.on_first_key = lambda: self.logger.info(
+            "Hotkey listener: first key event received (入力監視は働いています)"
+        )
+
         started = self.hotkey_listener.start()
         label = self.hotkey_listener.label
 

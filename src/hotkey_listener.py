@@ -110,6 +110,10 @@ class HotkeyListener:
         self.callback = callback
         self.listener = None
         self.current_keys = set()
+        # 入力監視が許可されていないと、リスナーは生きているのにイベントが
+        # 1つも届かない。届いたかどうかを外から確かめられるようにしておく。
+        self.keys_seen = 0
+        self.on_first_key = None
 
         self.modifiers = normalize_modifiers(
             DEFAULT_MODIFIERS if modifiers is None else modifiers
@@ -142,6 +146,11 @@ class HotkeyListener:
     def _on_press(self, key):
         """キー押下時のハンドラ"""
         try:
+            self.keys_seen += 1
+            if self.keys_seen == 1 and self.on_first_key:
+                # 「イベントが届いている」ことを一度だけ知らせる
+                self.on_first_key()
+
             # 修飾キーをセットに追加
             if hasattr(key, 'value'):
                 self.current_keys.add(key)
