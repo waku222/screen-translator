@@ -26,6 +26,40 @@ def test_default_config():
     assert config.log_level == 'INFO'
 
 
+def test_failed_capture_is_not_saved_by_default():
+    """取り込み画像の保存が既定で無効であることを確認
+
+    有効にすると画面の内容がそのままディスクに残るため、
+    既定値が False であることは明示的に守る。
+    """
+    config = Config(config_path="/nonexistent/path/config.yaml")
+    assert config.save_failed_capture is False
+
+
+def test_failed_capture_can_be_enabled():
+    """設定で取り込み画像の保存を有効にできることを確認"""
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        yaml.safe_dump({'debug': {'save_failed_capture': True}}, f)
+        config_path = f.name
+
+    try:
+        assert Config(config_path=config_path).save_failed_capture is True
+    finally:
+        os.unlink(config_path)
+
+
+def test_failed_capture_defaults_false_for_old_config():
+    """debug 節が無い旧い設定ファイルでも既定で無効になることを確認"""
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        yaml.safe_dump({'translation': {'source_lang': 'en'}}, f)
+        config_path = f.name
+
+    try:
+        assert Config(config_path=config_path).save_failed_capture is False
+    finally:
+        os.unlink(config_path)
+
+
 def test_custom_config():
     """カスタム設定が正しく読み込まれることを確認"""
     with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:

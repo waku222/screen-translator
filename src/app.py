@@ -33,13 +33,16 @@ class TranslationWorker(QObject):
     captured = pyqtSignal()          # 画面の取り込みが終わった（ここまでは画面に何も出さない）
     
     def __init__(self, capture: ScreenCapture, ocr: OCREngine, translator: BaseTranslator,
-                 source_lang: str = 'en', target_lang: str = 'ja'):
+                 source_lang: str = 'en', target_lang: str = 'ja',
+                 save_failed_capture: bool = False):
         super().__init__()
         self.capture = capture
         self.ocr = ocr
         self.translator = translator
         self.source_lang = source_lang
         self.target_lang = target_lang
+        # 画面の内容がディスクに残るため、設定で明示的に有効にしたときだけ保存する
+        self.save_failed_capture = save_failed_capture
         self.region = None
     
     def set_region(self, x: int, y: int, width: int, height: int):
@@ -69,11 +72,13 @@ class TranslationWorker(QObject):
             original_text = self.ocr.extract_text(image)
             
             if not original_text.strip():
-                # 何が写っていたか分からないと原因を追えないので画像を残す
-                saved = self._save_failed_capture(image)
                 message = "テキストが検出されませんでした"
-                if saved:
-                    message += f"（取り込んだ画像: {saved}）"
+                # 取り込んだ画像には画面の内容がそのまま写っているため、
+                # debug.save_failed_capture を有効にしたときだけ残す
+                if self.save_failed_capture:
+                    saved = self._save_failed_capture(image)
+                    if saved:
+                        message += f"（取り込んだ画像: {saved}）"
                 self.error.emit(message, "")
                 return
             
@@ -411,6 +416,7 @@ class MainApp(QObject):
         self.worker = TranslationWorker(
             self.capture, self.ocr, self.translator,
             self.config.source_lang, self.config.target_lang,
+            self.config.save_failed_capture,
         )
         self.worker.set_region(x, y, width, height)
         

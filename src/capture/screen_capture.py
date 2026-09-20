@@ -87,36 +87,6 @@ class ScreenCapture:
         return filepath
     
     
-    def capture_region_via_cli(self, x: int, y: int, width: int, height: int) -> Image.Image:
-        """
-        macOSのscreencaptureコマンドを使用して領域をキャプチャする（推奨）
-        mssよりも信頼性が高い（壁紙だけでなくウィンドウもキャプチャできる）
-        """
-        import subprocess
-        
-        fd, filepath = tempfile.mkstemp(suffix=".png")
-        os.close(fd)
-        
-        try:
-            # -x: サウンドなし, -R: 領域指定(x,y,w,h)
-            subprocess.run([
-                "screencapture",
-                "-x",
-                "-R", f"{x},{y},{width},{height}",
-                filepath
-            ], check=True)
-            
-            # 画像を読み込み
-            return Image.open(filepath).convert("RGB")
-        except subprocess.CalledProcessError as e:
-            raise
-        except Exception as e:
-            raise
-        finally:
-            # 一時ファイルを削除
-            if os.path.exists(filepath):
-                os.remove(filepath)
-    
     def get_monitors(self) -> list:
         """
         利用可能なモニター情報を取得する

@@ -33,6 +33,10 @@ class Config:
             'window_width': 600,
             'window_height': 500
         },
+        'debug': {
+            # 画面の内容がディスクに残るため既定では無効
+            'save_failed_capture': False
+        },
         'logging': {
             'level': 'INFO',
             'file': '~/Library/Logs/ScreenTranslator.log',
@@ -157,6 +161,15 @@ class Config:
     def window_height(self) -> int:
         """ウィンドウ高さ"""
         return self.config['ui']['window_height']
+    
+    # デバッグ設定
+    @property
+    def save_failed_capture(self) -> bool:
+        """OCR が空だったときに取り込み画像を保存するか
+
+        画面の内容がそのままディスクに残るため、既定は False。
+        """
+        return bool(self.config.get('debug', {}).get('save_failed_capture', False))
     
     # ロギング設定
     @property

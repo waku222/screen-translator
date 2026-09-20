@@ -1,19 +1,24 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "screen-translator"
-version = "1.0.0"
+version = "1.1.0"
 description = "Mac screen capture translator with OCR"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
-    {name = "Your Name"}
+    {name = "waku222"}
 ]
+# PyQt6 が GPL-3.0-only のため、本体もそれに合わせている（README のライセンス節を参照）
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: MacOS",
+    "Environment :: MacOS X",
+    "Topic :: Utilities",
 ]
 
 [tool.black]

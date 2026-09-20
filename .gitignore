@@ -53,3 +53,7 @@ debug_capture.png
 
 # ビルド成果物（Swift ヘルパー）
 helper/translate-helper
+.mypy_cache/
+
+# 公開前チェックの記録（履歴から除去した個人情報の記述を含むため追跡しない）
+docs/public-release-checklist.md

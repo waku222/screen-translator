@@ -3,7 +3,7 @@
 # このファイルは同梱のひな形です。実際に読み込まれるのは
 #   ~/Library/Application Support/ScreenTranslator/config.yaml
 # で、初回起動時にこのファイルがそこへ複製されます。
-# 設定を変えるときはユーザー領域の方を編集してください（アプリの再ビルードは不要）。
+# 設定を変えるときはユーザー領域の方を編集してください（アプリの再ビルドは不要）。
 
 # ホットキー設定
 # ※ 現状ホットキーは Cmd+Shift+T 固定で、この項目はまだ実装に反映されません
@@ -23,6 +23,14 @@ ui:
   theme: "dark"  # テーマ: "dark" または "light"
   window_width: 600
   window_height: 500
+
+# デバッグ設定
+debug:
+  # OCR が何も読み取れなかったとき、取り込んだ画面画像を
+  #   ~/Library/Logs/ScreenTranslator-failed-capture.png
+  # に保存する。画面の内容がディスクに残るため既定では無効。
+  # 読み取れない原因を調べるときだけ true にしてください。
+  save_failed_capture: false
 
 # ロギング設定
 logging:

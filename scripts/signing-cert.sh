@@ -1,6 +1,5 @@
 #!/bin/bash
-# 目的: ScreenTranslator.app を署名するための自己署名証明書をキーチェーンに作る
-# 区分: external
+# ScreenTranslator.app を署名するための自己署名証明書をキーチェーンに作る。
 #
 # なぜ必要か:
 #   現行の .app は adhoc 署名（Signature=adhoc、Designated Requirement なし）で、

@@ -5,7 +5,7 @@ set -e
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
 
-# 署名に使う証明書。.claude/run/signing-cert.sh で作る自己署名証明書を既定とする。
+# 署名に使う証明書。scripts/signing-cert.sh で作る自己署名証明書を既定とする。
 # 見つからない場合は adhoc 署名にフォールバックするが、その場合は再ビルドのたびに
 # 画面収録・アクセシビリティの許可がリセットされる。
 SIGN_IDENTITY="${SCREEN_TRANSLATOR_SIGN_IDENTITY:-Screen Translator Local}"
@@ -39,7 +39,7 @@ if security find-identity -v -p codesigning | grep -q "$SIGN_IDENTITY"; then
 else
   echo "⚠️  証明書「$SIGN_IDENTITY」が見つかりません。adhoc 署名にフォールバックします。"
   echo "   （再ビルドのたびに画面収録・アクセシビリティの許可がリセットされます）"
-  echo "   証明書を作るには: run signing-cert"
+  echo "   証明書を作るには: ./scripts/signing-cert.sh"
   codesign --force --deep --sign - dist/ScreenTranslator.app
 fi
 

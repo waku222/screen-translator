@@ -51,14 +51,13 @@ Vision を呼ぶ方式は、この環境では次の問題がありました。
 
 ## 必要環境
 
+- Apple Silicon の Mac（`build_app.sh` が `arm64-apple-macos26.0` 向けにビルドします）
 - macOS 26 以降（Translation.framework の `installedSource` 初期化子を使うため）
 - Python 3.11+
 - Xcode Command Line Tools（`swiftc` でヘルパーをビルドするため）
 - システム設定 › 一般 › 言語と地域 › 翻訳言語 に、翻訳元・翻訳先の言語がダウンロード済みであること
 
 ## インストール
-
-### 方法1: アプリケーションとしてビルド (推奨)
 
 ```bash
 # 1. 依存関係のインストール
@@ -69,7 +68,7 @@ pip install -r requirements.txt
 # 2. 署名用の証明書を用意（初回のみ。sudo のパスワードを聞かれます）
 #    これをやっておくと、以後どれだけ再ビルドしても
 #    画面収録・アクセシビリティの許可がリセットされません
-./.claude/run/signing-cert.sh
+./scripts/signing-cert.sh
 
 # 3. アプリケーションのビルド（Swift ヘルパーのビルドと署名も行われます）
 ./build_app.sh
@@ -79,15 +78,6 @@ pip install -r requirements.txt
 
 # 5. アプリを起動
 open /Applications/ScreenTranslator.app
-```
-
-### 方法2: Pythonスクリプトとして実行
-
-```bash
-# 1. セットアップスクリプトを実行
-./setup.sh
-
-# 2. アプリケーションが自動起動されます
 ```
 
 ### 設定ファイル
@@ -104,6 +94,7 @@ open /Applications/ScreenTranslator.app
 初回起動時に以下の権限許可が必要です:
 - **画面収録**: スクリーンショット撮影のため
 - **アクセシビリティ**: ショートカットキー監視のため
+- **入力監視**: ホットキーの検知のため（許可が無いとホットキーが黙って反応しません）
 
 ## 使い方
 
@@ -115,18 +106,16 @@ open /Applications/ScreenTranslator.app
 
 ## 設定のカスタマイズ
 
-`config.yaml` ファイルを編集することで、以下の設定をカスタマイズできます:
+`~/Library/Application Support/ScreenTranslator/config.yaml` を編集します
+（リポジトリ直下の `config.yaml` はそこへ複製されるひな形です）。
 
 ```yaml
-# ホットキー設定
-hotkey:
-  modifiers: ["cmd", "shift"]  # 修飾キー
-  key: "t"                     # キー
-
 # 翻訳設定
 translation:
-  source_lang: "en"  # 翻訳元言語 ("auto"で自動検出)
+  engine: "apple"    # 現在は "apple"（Apple のオンデバイス翻訳）のみ
+  source_lang: "en"  # 翻訳元言語（Apple 翻訳では "auto" は使えません）
   target_lang: "ja"  # 翻訳先言語
+  timeout: 45        # 翻訳1回を待つ秒数
 
 # UI設定
 ui:
@@ -134,13 +123,35 @@ ui:
   window_width: 600
   window_height: 500
 
+# デバッグ設定
+debug:
+  save_failed_capture: false  # 下記「取り込んだ画像の保存について」を参照
+
 # ロギング設定
 logging:
   level: "INFO"      # ログレベル: DEBUG, INFO, WARNING, ERROR
-  file: "/tmp/screen-translator.log"
+  file: "~/Library/Logs/ScreenTranslator.log"
 ```
 
 設定変更後、アプリを再起動してください。
+
+`config.yaml` には `hotkey:` の項目もありますが、**現状ホットキーは Cmd+Shift+T 固定で、
+この項目はまだ実装に反映されません**。
+
+## プライバシー
+
+- 翻訳は Apple の Translation.framework によるオンデバイス処理で、
+  **画面の内容が外部に送信されることはありません**。ヘルパーとのやり取りは
+  標準入出力のパイプのみで、ネットワーク通信は行いません
+- ログに記録するのは処理した**文字数だけ**で、原文・訳文そのものは残しません
+- ホットキーの監視は Cmd+Shift+T の判定だけを行い、打鍵内容は記録しません
+
+### 取り込んだ画像の保存について
+
+OCR が何も読み取れなかったとき、原因調査のために取り込んだ画面画像を
+`~/Library/Logs/ScreenTranslator-failed-capture.png` に保存できます。
+**画面の内容がそのままディスクに残るため、既定では無効**です。
+調査が必要なときだけ設定の `debug.save_failed_capture` を `true` にしてください。
 
 ## トラブルシューティング
 
@@ -148,23 +159,26 @@ logging:
 
 - 選択範囲が小さすぎる可能性があります。より広い範囲を選択してください
 - 画像の解像度が低い場合、OCRの精度が下がります
-- ログファイル (`/tmp/screen-translator.log`) を確認してください
+- ログファイル (`~/Library/Logs/ScreenTranslator.log`) を確認してください
+- 設定の `debug.save_failed_capture` を `true` にすると、何が取り込まれていたかを画像で確認できます
 
 ### 翻訳が失敗する
 
-- インターネット接続を確認してください
+- 翻訳はオンデバイスで行うため通信は不要です。まず システム設定 › 一般 › 言語と地域 ›
+  翻訳言語 に翻訳元・翻訳先の言語がダウンロード済みか確認してください
 - ログファイルでエラーの詳細を確認できます
 
 ### ホットキーが動作しない
 
 - システム設定 > プライバシーとセキュリティ > アクセシビリティ で、アプリに権限が付与されているか確認してください
-- 他のアプリと同じホットキーが競合している可能性があります。`config.yaml`で別のキーに変更してください
+- システム設定 > プライバシーとセキュリティ > 入力監視 も確認してください
+- ホットキーは Cmd+Shift+T 固定です。他のアプリと競合している場合、現状は変更できません
 
 ### ログの確認
 
 ```bash
 # リアルタイムでログを確認
-tail -f /tmp/screen-translator.log
+tail -f ~/Library/Logs/ScreenTranslator.log
 
 # ログレベルをDEBUGに変更してより詳細な情報を取得
 # config.yamlのlogging.levelを"DEBUG"に変更
@@ -200,4 +214,17 @@ mypy src/
 
 ## ライセンス
 
-MIT License
+GNU General Public License v3.0 or later (GPL-3.0-or-later)。全文は [LICENSE](LICENSE) にあります。
+
+GUI に使用している **PyQt6 が GPL-3.0-only** のため、それに合わせています
+（`build_app.sh` が生成する `.app` は PyQt6 を同梱するため、配布する場合は
+結合物全体が GPLv3 の条件に従います）。
+
+主な依存ライブラリのライセンス:
+
+| ライブラリ | ライセンス |
+| --- | --- |
+| PyQt6 | GPL-3.0-only |
+| PyQt6-Qt6 | LGPL-3.0 |
+| pynput | LGPL-3.0 |
+| mss, Pillow, PyObjC, PyYAML, pyperclip, py2app | MIT / BSD |
