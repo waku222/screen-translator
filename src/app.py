@@ -168,8 +168,9 @@ class MainApp(QObject):
         # シグナル接続
         self.hotkey_triggered.connect(self.start_capture)
         
-        self.setup_tray_icon()
+        # メニューの表示に実際のホットキーを載せるので、リスナーを先に作る
         self.setup_hotkey()
+        self.setup_tray_icon()
         self.check_permissions()
         self.start_warmup()
     
@@ -245,11 +246,22 @@ class MainApp(QObject):
     
     def setup_hotkey(self):
         """ホットキーリスナーを設定"""
-        self.hotkey_listener = HotkeyListener(self._on_hotkey_pressed)
+        try:
+            self.hotkey_listener = HotkeyListener(
+                self._on_hotkey_pressed,
+                self.config.hotkey_modifiers,
+                self.config.hotkey_key,
+            )
+        except ValueError as e:
+            # 設定が壊れていてもメニューバーからは使えるので、既定で起動を続ける
+            self.logger.error(f"設定のホットキーが解釈できません: {e}")
+            self.logger.error("既定のホットキーで起動します")
+            self.hotkey_listener = HotkeyListener(self._on_hotkey_pressed)
+
         started = self.hotkey_listener.start()
         # 入力監視の権限が無いと黙って動かないので、状態を必ず残す
         if started and self.hotkey_listener.is_alive():
-            self.logger.info("Hotkey listener started (Cmd+Shift+T)")
+            self.logger.info(f"Hotkey listener started ({self.hotkey_listener.label})")
         else:
             self.logger.error(
                 "Hotkey listener did not start. "
@@ -314,7 +326,12 @@ class MainApp(QObject):
         # utils.appkit_patch でガードを入れている（入れ忘れると落ちる）。
         self.menu = QMenu()
         
-        translate_action = QAction("🌐 翻訳 (Cmd+Shift+T)", self.menu)
+        # ホットキーは設定で変えられるので、表示も実際の設定に合わせる
+        hotkey_label = self.hotkey_listener.label if self.hotkey_listener else None
+        translate_action = QAction(
+            f"🌐 翻訳 ({hotkey_label})" if hotkey_label else "🌐 翻訳",
+            self.menu,
+        )
         translate_action.triggered.connect(self.start_capture)
         self.menu.addAction(translate_action)
         
@@ -325,7 +342,10 @@ class MainApp(QObject):
         self.menu.addAction(quit_action)
         
         self.tray_icon.setContextMenu(self.menu)
-        self.tray_icon.setToolTip("Screen Translator\n右クリックでメニュー")
+        tooltip = "Screen Translator\nクリックでメニュー"
+        if hotkey_label:
+            tooltip += f"\nホットキー: {hotkey_label}"
+        self.tray_icon.setToolTip(tooltip)
         self.tray_icon.activated.connect(self.on_tray_activated)
         self.tray_icon.show()
     
@@ -488,7 +508,10 @@ class MainApp(QObject):
         
         self.logger.info("Screen Translator is running")
         print("Screen Translator is running...")
-        print("Right-click the tray icon or press Cmd+Shift+T to capture")
+        if self.hotkey_listener and self.hotkey_listener.is_alive():
+            print(f"Click the menu bar icon or press {self.hotkey_listener.label} to capture")
+        else:
+            print("Click the menu bar icon to capture (hotkey is not active)")
         
         return self.app.exec()
 

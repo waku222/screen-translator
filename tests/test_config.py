@@ -18,7 +18,7 @@ def test_default_config():
     """デフォルト設定が正しく読み込まれることを確認"""
     config = Config(config_path="/nonexistent/path/config.yaml")
     
-    assert config.hotkey_modifiers == ['cmd', 'shift']
+    assert config.hotkey_modifiers == ['ctrl', 'alt']
     assert config.hotkey_key == 't'
     assert config.source_lang == 'en'
     assert config.target_lang == 'ja'

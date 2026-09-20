@@ -6,9 +6,14 @@
 # 設定を変えるときはユーザー領域の方を編集してください（アプリの再ビルドは不要）。
 
 # ホットキー設定
-# ※ 現状ホットキーは Cmd+Shift+T 固定で、この項目はまだ実装に反映されません
+# modifiers に使えるもの: cmd / shift / ctrl / alt（option でも可）
+# key に使えるもの: 英字 a-z と数字 0-9
+#
+# 既定を Ctrl+Option+T にしているのは、Cmd+Shift+T が Chrome の
+# 「閉じたタブを再度開く」などと衝突するため。押下を奪い取れないので、
+# 他のアプリが使っていない組み合わせを選ぶ必要があります。
 hotkey:
-  modifiers: ["cmd", "shift"]
+  modifiers: ["ctrl", "alt"]
   key: "t"
 
 # 翻訳設定

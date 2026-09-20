@@ -19,7 +19,8 @@ class Config:
     # デフォルト設定
     DEFAULT_CONFIG = {
         'hotkey': {
-            'modifiers': ['cmd', 'shift'],
+            # Cmd+Shift+T は Chrome の「閉じたタブを再度開く」などと衝突する
+            'modifiers': ['ctrl', 'alt'],
             'key': 't'
         },
         'translation': {
