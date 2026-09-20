@@ -164,6 +164,8 @@ class MainApp(QObject):
         
         # ホットキーリスナー
         self.hotkey_listener = None
+        # ホットキーが実際に効く状態か（入力監視の許可が無いと効かない）
+        self.hotkey_active = False
         
         # シグナル接続
         self.hotkey_triggered.connect(self.start_capture)
@@ -259,14 +261,48 @@ class MainApp(QObject):
             self.hotkey_listener = HotkeyListener(self._on_hotkey_pressed)
 
         started = self.hotkey_listener.start()
-        # 入力監視の権限が無いと黙って動かないので、状態を必ず残す
-        if started and self.hotkey_listener.is_alive():
-            self.logger.info(f"Hotkey listener started ({self.hotkey_listener.label})")
-        else:
+        label = self.hotkey_listener.label
+
+        # 入力監視の許可が無いと、リスナーのスレッドは生きているのに
+        # イベントが1つも届かない（黙って効かない）。start() や is_alive() は
+        # これを区別できないので、TCC の状態を直接確かめる。
+        allowed = self._input_monitoring_allowed()
+
+        if not started:
+            self.logger.error(f"Hotkey listener failed to start ({label})")
+            self.hotkey_active = False
+        elif allowed is False:
             self.logger.error(
-                "Hotkey listener did not start. "
-                "システム設定 › プライバシーとセキュリティ › 入力監視 で許可が必要です"
+                f"Hotkey listener is running but deaf ({label}): "
+                "入力監視が許可されていません。"
+                "システム設定 › プライバシーとセキュリティ › 入力監視 で "
+                "ScreenTranslator を許可してください"
             )
+            self.hotkey_active = False
+            self._request_input_monitoring()
+        elif allowed is None:
+            self.logger.warning(f"Hotkey listener started ({label}); 入力監視の状態は確認できません")
+            self.hotkey_active = True
+        else:
+            self.logger.info(f"Hotkey listener started ({label}); 入力監視: 許可あり")
+            self.hotkey_active = True
+
+    @staticmethod
+    def _input_monitoring_allowed():
+        """入力監視が許可されているか（確認できない場合は None）"""
+        try:
+            import Quartz
+            return bool(Quartz.CGPreflightListenEventAccess())
+        except Exception:
+            return None
+
+    def _request_input_monitoring(self):
+        """入力監視の許可を求める（未許可の初回のみシステムのダイアログが出る）"""
+        try:
+            import Quartz
+            Quartz.CGRequestListenEventAccess()
+        except Exception as e:
+            self.logger.warning(f"Could not request input monitoring access: {e}")
     
     def check_permissions(self):
         """
@@ -326,14 +362,21 @@ class MainApp(QObject):
         # utils.appkit_patch でガードを入れている（入れ忘れると落ちる）。
         self.menu = QMenu()
         
-        # ホットキーは設定で変えられるので、表示も実際の設定に合わせる
+        # ホットキーは設定で変えられるので、表示も実際の設定に合わせる。
+        # 効かない状態のときに組み合わせだけ出すと嘘になるので、出し分ける。
         hotkey_label = self.hotkey_listener.label if self.hotkey_listener else None
         translate_action = QAction(
-            f"🌐 翻訳 ({hotkey_label})" if hotkey_label else "🌐 翻訳",
+            f"🌐 翻訳 ({hotkey_label})" if hotkey_label and self.hotkey_active else "🌐 翻訳",
             self.menu,
         )
         translate_action.triggered.connect(self.start_capture)
         self.menu.addAction(translate_action)
+        
+        if hotkey_label and not self.hotkey_active:
+            # 押しても無反応な理由が分かるようにしておく
+            notice = QAction(f"⚠️ {hotkey_label} には入力監視の許可が必要です", self.menu)
+            notice.setEnabled(False)
+            self.menu.addAction(notice)
         
         self.menu.addSeparator()
         
@@ -343,8 +386,10 @@ class MainApp(QObject):
         
         self.tray_icon.setContextMenu(self.menu)
         tooltip = "Screen Translator\nクリックでメニュー"
-        if hotkey_label:
+        if hotkey_label and self.hotkey_active:
             tooltip += f"\nホットキー: {hotkey_label}"
+        elif hotkey_label:
+            tooltip += f"\nホットキー {hotkey_label}: 入力監視の許可が必要です"
         self.tray_icon.setToolTip(tooltip)
         self.tray_icon.activated.connect(self.on_tray_activated)
         self.tray_icon.show()
@@ -508,7 +553,7 @@ class MainApp(QObject):
         
         self.logger.info("Screen Translator is running")
         print("Screen Translator is running...")
-        if self.hotkey_listener and self.hotkey_listener.is_alive():
+        if self.hotkey_listener and self.hotkey_active:
             print(f"Click the menu bar icon or press {self.hotkey_listener.label} to capture")
         else:
             print("Click the menu bar icon to capture (hotkey is not active)")
