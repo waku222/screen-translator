@@ -276,6 +276,10 @@ mypy src/
 不具合を見つけたときは Issue でお知らせいただければ目を通します（返信や修正の時期はお約束できません）。
 GPL-3.0 なので、自分で直して使う・改変版を再配布するのは自由です。
 
+ビルド済みの `.app` は配布していません。Mac App Store での配布や Developer ID での
+公証配布を検討した結果は [docs/distribution-options.md](docs/distribution-options.md)
+にまとめてあります。
+
 ## ライセンス
 
 GNU General Public License v3.0 or later (GPL-3.0-or-later)。全文は [LICENSE](LICENSE) にあります。
