@@ -37,7 +37,7 @@ if security find-identity -v -p codesigning | grep -q "$SIGN_IDENTITY"; then
   echo "Signing with: $SIGN_IDENTITY"
   codesign --force --deep --sign "$SIGN_IDENTITY" dist/ScreenTranslator.app
 else
-  echo "⚠️  証明書「$SIGN_IDENTITY」が見つかりません。adhoc 署名にフォールバックします。"
+  echo "⚠️  証明書「${SIGN_IDENTITY}」が見つかりません。adhoc 署名にフォールバックします。"
   echo "   （再ビルドのたびに画面収録・アクセシビリティの許可がリセットされます）"
   echo "   証明書を作るには: ./scripts/signing-cert.sh"
   codesign --force --deep --sign - dist/ScreenTranslator.app

@@ -33,7 +33,7 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
 if security find-identity -v -p codesigning | grep -q "$NAME"; then
-  echo "✅ 証明書「$NAME」は既にあります。何もせず終了します。"
+  echo "✅ 証明書「${NAME}」は既にあります。何もせず終了します。"
   security find-identity -v -p codesigning
   exit 0
 fi
